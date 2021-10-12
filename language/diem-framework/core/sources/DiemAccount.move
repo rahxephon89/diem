@@ -26,6 +26,7 @@ module DiemFramework::DiemAccount {
     use Std::BCS;
     use Std::Event::{Self, EventHandle};
     use Std::Errors;
+    use Std::GUID;
     use Std::Hash;
     use Std::Option::{Self, Option};
     use Std::Signer;
@@ -1197,7 +1198,7 @@ module DiemFramework::DiemAccount {
         CoreAddresses::assert_diem_root(&dr_account);
         Roles::grant_diem_root_role(&dr_account);
         SlidingNonce::publish(&dr_account);
-        Event::publish_generator(&dr_account);
+        GUID::publish_generator(&dr_account);
 
         assert(
             !exists<AccountOperationsCapability>(@DiemRoot),
@@ -1282,7 +1283,7 @@ module DiemFramework::DiemAccount {
         let new_account = create_signer(new_account_address);
         Roles::grant_treasury_compliance_role(&new_account, dr_account);
         SlidingNonce::publish(&new_account);
-        Event::publish_generator(&new_account);
+        GUID::publish_generator(&new_account);
         VASPDomain::publish_vasp_domain_manager(&new_account);
         make_account(&new_account, auth_key_prefix)
     }
@@ -1349,7 +1350,7 @@ module DiemFramework::DiemAccount {
         DiemTimestamp::assert_operating();
         Roles::assert_treasury_compliance(creator_account);
         let new_dd_account = create_signer(new_account_address);
-        Event::publish_generator(&new_dd_account);
+        GUID::publish_generator(&new_dd_account);
         Roles::new_designated_dealer_role(creator_account, &new_dd_account);
         DesignatedDealer::publish_designated_dealer_credential<CoinType>(&new_dd_account, creator_account, add_all_currencies);
         DualAttestation::publish_credential(&new_dd_account, creator_account, human_name);
@@ -1405,7 +1406,7 @@ module DiemFramework::DiemAccount {
         let new_account = create_signer(new_account_address);
         Roles::new_parent_vasp_role(creator_account, &new_account);
         VASP::publish_parent_vasp_credential(&new_account, creator_account);
-        Event::publish_generator(&new_account);
+        GUID::publish_generator(&new_account);
         DualAttestation::publish_credential(&new_account, creator_account, human_name);
         VASPDomain::publish_vasp_domains(&new_account);
         make_account(&new_account, auth_key_prefix);
@@ -1464,7 +1465,7 @@ module DiemFramework::DiemAccount {
             parent,
             &new_account,
         );
-        Event::publish_generator(&new_account);
+        GUID::publish_generator(&new_account);
         make_account(&new_account, auth_key_prefix);
         add_currencies_for_account<Token>(&new_account, add_all_currencies);
     }
@@ -2202,7 +2203,7 @@ module DiemFramework::DiemAccount {
         let new_account = create_signer(new_account_address);
         // The dr_account account is verified to have the diem root role in `Roles::new_validator_role`
         Roles::new_validator_role(dr_account, &new_account);
-        Event::publish_generator(&new_account);
+        GUID::publish_generator(&new_account);
         ValidatorConfig::publish(&new_account, dr_account, human_name);
         make_account(&new_account, auth_key_prefix)
     }
@@ -2244,7 +2245,7 @@ module DiemFramework::DiemAccount {
         let new_account = create_signer(new_account_address);
         // The dr_account is verified to have the diem root role in `Roles::new_validator_operator_role`
         Roles::new_validator_operator_role(dr_account, &new_account);
-        Event::publish_generator(&new_account);
+        GUID::publish_generator(&new_account);
         ValidatorOperatorConfig::publish(&new_account, dr_account, human_name);
         make_account(&new_account, auth_key_prefix)
     }
