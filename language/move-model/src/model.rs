@@ -17,7 +17,7 @@
 use std::{
     any::{Any, TypeId},
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::OsStr,
     fmt::{self, Formatter},
     rc::Rc,
@@ -1062,6 +1062,7 @@ impl GlobalEnv {
             spec,
             called_funs: Default::default(),
             calling_funs: Default::default(),
+            trasitive_closure_of_called_funs: Default::default(),
         }
     }
 
@@ -2696,6 +2697,9 @@ pub struct FunctionData {
 
     /// A cache for the calling functions.
     calling_funs: RefCell<Option<BTreeSet<QualifiedId<FunId>>>>,
+
+    /// A cache for the transitive closure of the called functions.
+    trasitive_closure_of_called_funs: RefCell<Option<BTreeSet<QualifiedId<FunId>>>>,
 }
 
 impl FunctionData {
@@ -2714,6 +2718,7 @@ impl FunctionData {
             spec: Spec::default(),
             called_funs: Default::default(),
             calling_funs: Default::default(),
+            trasitive_closure_of_called_funs: Default::default(),
         }
     }
 }
@@ -3306,6 +3311,34 @@ impl<'env> FunctionEnv<'env> {
             .collect();
         *self.data.called_funs.borrow_mut() = Some(called.clone());
         called
+    }
+
+    /// Get the transitive closure of the called functions
+    pub fn get_transitive_closure_of_called_functions(&self) -> BTreeSet<QualifiedId<FunId>> {
+        if let Some(trans_called) = &*self.data.trasitive_closure_of_called_funs.borrow() {
+            return trans_called.clone();
+        }
+
+        let mut set: BTreeSet<QualifiedId<FunId>> = BTreeSet::new();
+        let mut reachable_funcs: VecDeque<FunctionEnv> = VecDeque::new();
+        reachable_funcs.push_back(self.clone());
+
+        // BFS in reachable_funcs to collect all reachable functions
+        while !reachable_funcs.is_empty() {
+            let current_fnc = reachable_funcs.pop_front();
+            if let Some(fnc) = current_fnc {
+                for callee in fnc.get_called_functions() {
+                    let f = self.module_env.env.get_function(callee);
+                    let qualified_id = f.get_qualified_id();
+                    if !set.contains(&qualified_id) {
+                        set.insert(qualified_id);
+                        reachable_funcs.push_back(f.clone());
+                    }
+                }
+            }
+        }
+        *self.data.trasitive_closure_of_called_funs.borrow_mut() = Some(set.clone());
+        set
     }
 
     /// Returns the function name excluding the address and the module name
