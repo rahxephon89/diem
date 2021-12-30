@@ -89,6 +89,7 @@ pub enum TraceEntry {
     Abort(QualifiedId<FunId>, ModelValue),
     Exp(NodeId, ModelValue),
     SubExp(NodeId, ModelValue),
+    GlobalMem(NodeId, ModelValue),
 }
 
 // Error message matching
@@ -272,6 +273,7 @@ impl<'env> BoogieWrapper<'env> {
             };
 
             let mut subexp_map = BTreeMap::new();
+            let mut global_mem_map = BTreeMap::new();
             for entry in &error.execution_trace {
                 use TraceEntry::*;
                 if abort_in_progress.is_some() && !matches!(entry, Exp(..)) {
@@ -357,6 +359,23 @@ impl<'env> BoogieWrapper<'env> {
                             subexp_map.insert(denotation.to_string(), (*node_id, value.clone()));
                         }
                     }
+                    GlobalMem(node_id, value) => {
+                        if let ModelValue::List(elems) = value {
+                            // The bytecode track_global_memory takes the form
+                            // "($Memory_107864 |T@[Int]Bool!val!2| |T@[Int]$1_DiemTimestamp_CurrentTimeMicroseconds!val!0|)"
+                            // so the extracted list has three values where elems[2] is the reference to the model
+                            // of the corresponding global memory array while elems[2] is the reference to the array to denote
+                            // whether the memory exists
+                            if elems.len() == 3 {
+                                if let ModelValue::Literal(s) = &elems[2] {
+                                    // Extract the struct name from elems[2]
+                                    // e.g., $1_DiemTimestamp_CurrentTimeMicroseconds
+                                    let struct_name_str = &s[s.find("_").unwrap() + 1..s.find("!").unwrap()];
+                                    global_mem_map.insert(struct_name_str.to_string(), (*node_id, elems[1].clone(), elems[2].clone()));
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -389,6 +408,19 @@ impl<'env> BoogieWrapper<'env> {
                 display.push("Execution Trace:".to_string());
                 display.append(&mut trace_display)
             }
+
+            // Inject information about the global memory of the function where this failure happens
+            if !global_mem_map.is_empty() {
+                let mut trace_display = std::mem::take(&mut display);
+                display.push("Related Global Memory: ".to_string());
+                for (struct_name_str, (id, domain_value, mem_value)) in global_mem_map {
+                    let ty = self.env.get_node_type(id);
+                    let pretty = mem_value.pretty_mem(self, &domain_value, error.model.as_ref().unwrap(), &ty).unwrap();
+                    display.extend(self.make_mem_entry(struct_name_str, pretty));
+                }
+                display.append(&mut trace_display)
+            }
+
             diag = diag.with_notes(display);
         }
         self.env.add_diag(diag);
@@ -422,6 +454,18 @@ impl<'env> BoogieWrapper<'env> {
         .collect()
     }
 
+    fn make_mem_entry(&self, var_name: String, value: PrettyDoc) -> Vec<String> {
+        self.render(
+            PrettyDoc::text("Resource name: ".to_string() + &var_name)
+                .append(PrettyDoc::space())
+                .append(PrettyDoc::line().append(PrettyDoc::text("Values: ")))
+                .append(PrettyDoc::line().append(value).nest(2).group()),
+        )
+        .lines()
+        .map(|s| "        ".to_string() + s)
+        .collect()
+    }
+
     /// Renders the doc.
     fn render(&self, doc: PrettyDoc) -> String {
         let mut lines = vec![];
@@ -437,7 +481,6 @@ impl<'env> BoogieWrapper<'env> {
             let inbetween = out[at..at + cap.get(0).unwrap().start()].trim();
             at = usize::saturating_add(at, cap.get(0).unwrap().end());
             let msg = cap.name("msg").unwrap().as_str();
-
             // Filter diags that we know and will be processed later (e.g., inconclusive).
             // Other unknown diags will be reported as unexpected boogie output.
             if !inbetween.is_empty()
@@ -578,6 +621,11 @@ impl<'env> BoogieWrapper<'env> {
                 let node_id = self.extract_node_id(args)?;
                 let value = self.extract_value(value)?;
                 Ok(TraceEntry::SubExp(node_id, value))
+            }
+            "track_global_mem" => {
+                let node_id = self.extract_node_id(args)?;
+                let value = self.extract_value(value)?;
+                Ok(TraceEntry::GlobalMem(node_id, value))
             }
             _ => Err(ModelParseError::new(&format!(
                 "unrecognized augmented trace entry `{}`",
@@ -841,8 +889,10 @@ impl ModelValue {
             if args.len() != 2 {
                 return None;
             }
+            //println!("arg0:{:?}, arg1:{:?}", args[0], args[1]);
             let size = (&args[1]).extract_number()?;
             let map_key = &args[0];
+            //println!("mapkey:{:}, deduct:{:}", map_key.extract_literal()?, &self.deduct_table_name(map_key.extract_literal()?)?);
             let value_array_map = model
                 .vars
                 .get(&ModelValue::literal(
@@ -870,6 +920,116 @@ impl ModelValue {
         }
     }
 
+    /// Extract updated value from value_update_map
+    /// value_update_map is obtained from the Store_ function in the model
+    fn extract_updated_value<'a>(&self,
+        value_update_map: &'a BTreeMap<ModelValue, ModelValue>, key: &ModelValue, idx: usize) -> Option<&'a ModelValue> {
+        for (up_k, up_v) in value_update_map {
+            if let ModelValue::List(elems) = up_k {
+                // Format for Store:
+                // We only consider the case
+                // Where elems has three elements: Array symbol, position, updated value
+                if elems.len() == 3 && &elems[0] == key && elems[1].extract_number()? == idx {
+                    return Some(&elems[2]);
+                }
+                break;
+            }
+        }
+        None
+    }
+
+    fn extract_mem_vector(&self, domain: &ModelValue, model: &Model) -> Option<ModelValueVector> {
+        let mut size = 0;
+
+        // Retrieve the domain map in the model
+        let domain_map = model
+        .vars
+        .get(&ModelValue::literal(
+            &self.deduct_table_name(domain.extract_literal()?)?,
+        ))?
+        .extract_map()?;
+
+        let domain_idx_map = self.create_idx_map(&domain_map)?;
+
+        let value_array_map = model
+            .vars
+            .get(&ModelValue::literal(
+                &self.deduct_table_name(self.extract_literal()?)?,
+            ))?
+            .extract_map()?;
+
+
+        // In the model, the Store_ represents the update of that map
+        let value_update_map_opt = model
+        .vars
+        .get(&ModelValue::literal(
+            &self.deduct_upate_table_name(self.extract_literal()?)?,
+        )).and_then(|update_map| { update_map.extract_map() } );
+
+        let mut values = BTreeMap::new();
+        let mut default = ModelValue::error();
+        // Each entry in value_array_map takes the form:
+        // key: |T@[Int]$1_Bug7_BallotCounter!val!0| 0
+        // value: ($1_Bug7_BallotCounter 18446744073709522257)
+        // elems[1] is index to represent the instance of the memory
+        // domain is used to retrieve the map to indicate whether the memory location exists
+        // insertion happens only when the content exists
+        for (key, value) in value_array_map {
+                if let ModelValue::List(elems) = key {
+                    if elems.len() == 2 && &elems[0] == self {
+                        let _ = elems[1].extract_number().and_then(|idx| {
+                            domain_idx_map.get(domain).and_then(|domain_exists_map| {
+                                domain_exists_map.get(&idx).and_then(|domain_exists_value| {
+                                    let domain_exists = domain_exists_value.extract_literal()?;
+                                    // Only print the memory locations in the domain
+                                    if domain_exists == "true" {
+                                        let mut val = value.clone();
+                                        if let Some(value_update_map) = value_update_map_opt {
+                                            // Extract the updated value from value_update_map
+                                            let updated_value_opt = self.extract_updated_value(value_update_map, &elems[0], idx);
+                                            if let Some(updated_value) = updated_value_opt {
+                                                val = updated_value.clone();
+                                            }
+                                        }
+                                        values.insert(idx, val);
+                                        size += 1;
+                                    }
+                                    Some(())
+                                })
+                            })
+                        });
+                    }
+                } else if key == &ModelValue::literal("else") {
+                    // Currently, we assume existence of default memory locations print out the value.
+                    default = value.clone();
+                }
+        }
+        Some(ModelValueVector {
+            size,
+            values,
+            default,
+        })
+    }
+
+    /// Transpose model_map by aggregating values in it by the key into a standalone map
+    fn create_idx_map(&self, model_map: &BTreeMap<ModelValue, ModelValue>) -> Option<BTreeMap<ModelValue, BTreeMap<usize, ModelValue>>> {
+        let mut map: BTreeMap<ModelValue, BTreeMap<usize, ModelValue>> = BTreeMap::new();
+        // Each entry in model_map takes the form:
+        // key: |T@[Int]Bool!val!3| 153
+        // value: true
+        // elems[1] is the index of the array
+        // value represents whether the memory indexed by elems[1] exists
+        for (key, value) in model_map {
+            if let ModelValue::List(elems) = key {
+                if elems.len() == 2 {
+                    map.entry(elems[0].clone()).or_insert_with(BTreeMap::new);
+                    map.get_mut(&elems[0]).unwrap().insert(elems[1].extract_number()?, value.clone());
+                }
+            }
+        }
+        Some(map)
+    }
+
     fn deduct_table_name(&self, map_key: &str) -> Option<String> {
         // The generic representation of map keys is `|T@[Int]<X>!val!0` where `<X>` is the
         // vector element type.
@@ -877,6 +1037,15 @@ impl ModelValue {
         let j = map_key.find('!')?;
         let suffix = &map_key[i + 1..j];
         Some(format!("Select__T@[Int]{}_", suffix))
+    }
+
+    fn deduct_upate_table_name(&self, map_key: &str) -> Option<String> {
+        // The generic representation of map keys is `|T@[Int]<X>!val!0` where `<X>` is the
+        // vector element type.
+        let i = map_key.find(']')?;
+        let j = map_key.find('!')?;
+        let suffix = &map_key[i + 1..j];
+        Some(format!("Store__T@[Int]{}_", suffix))
     }
 
     fn extract_seq_unit(&self) -> Option<ModelValue> {
@@ -1058,6 +1227,7 @@ impl ModelValue {
         param: &Type,
     ) -> Option<PrettyDoc> {
         let values = self.extract_vector(model, param)?;
+
         let mut entries = vec![];
         let mut next = 0;
         let mut sparse = false;
@@ -1147,6 +1317,51 @@ impl ModelValue {
             ))
             .append(Self::pretty_vec_or_struct_body(entries)),
         )
+    }
+
+    /// Pretty prints the global memory structure
+    pub fn pretty_mem(&self,
+        wrapper: &BoogieWrapper,
+        domain: &ModelValue,
+        model: &Model,
+        param: &Type)
+    -> Option<PrettyDoc>
+    {
+        let values = self.extract_mem_vector(domain, model)?;
+        let mut entries = vec![];
+        let mut next = 0;
+        let mut sparse = false;
+        for idx in values.values.keys().sorted() {
+            //println!("idx:{}", idx);
+            //if *idx >= values.size {
+                // outside of domain, ignore.
+            //    continue;
+            //}
+            //println!("params:{:?}", param);
+            let mut p = values
+                .values
+                .get(idx)?
+                .pretty_or_raw(wrapper, model, param);
+            // idx is the address that owns the resource
+            p = PrettyDoc::text(format!("Address({}): ", idx)).append(p);
+            //if *idx > next {
+                //p = PrettyDoc::text(format!("{}: ", idx)).append(p);
+            //    sparse = true;
+            //}
+            next = usize::saturating_add(*idx, 1);
+            entries.push(p);
+        }
+        //if next < values.size || sparse {
+            //println!("parse default:{:?}:{:?}", param, values.default);
+        let default = values
+            .default
+            .pretty(wrapper, model, param)
+            .unwrap_or_else(|| PrettyDoc::text("undef"));
+            //entries.insert(0, PrettyDoc::text(format!("(size): {}", values.size)));
+        entries.push(PrettyDoc::text("Default Address: ").append(default));
+        //}
+        //Some(PrettyDoc::text("vector").append(Self::pretty_vec_or_struct_body(entries)))
+        Some(Self::pretty_vec_or_struct_body(entries))
     }
 }
 

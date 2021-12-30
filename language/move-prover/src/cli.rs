@@ -529,6 +529,12 @@ impl Options {
                     .help("For each script function which is verification target, \
                     print out the names of all called functions, directly or indirectly.")
             )
+            .arg(
+                Arg::with_name("global-memory")
+                    .long("global-memory")
+                    .help("for each verification error, print out the global memory \
+                    that the function accessed")
+            )
             .after_help("More options available via `--config file` or `--config-str str`. \
             Use `--print-config` to see format and current values. \
             See `move-prover/src/cli.rs::Option` for documentation.");
@@ -772,6 +778,10 @@ impl Options {
 
         if matches.is_present("script-reach") {
             options.script_reach = true;
+        }
+
+        if matches.is_present("global-memory") {
+            options.backend.global_memory = true;
         }
 
         options.backend.derive_options();

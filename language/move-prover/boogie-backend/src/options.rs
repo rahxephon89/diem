@@ -105,6 +105,8 @@ pub struct BoogieOptions {
     pub vector_theory: VectorTheory,
     /// Whether to generate a z3 trace file and where to put it.
     pub z3_trace_file: Option<String>,
+    /// Options for printing out the global memory accessed by a function where the verification error happend
+    pub global_memory: bool,
 }
 
 impl Default for BoogieOptions {
@@ -139,6 +141,7 @@ impl Default for BoogieOptions {
             hard_timeout_secs: 0,
             vector_theory: VectorTheory::BoogieArray,
             z3_trace_file: None,
+            global_memory: false,
         }
     }
 }

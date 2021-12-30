@@ -171,6 +171,7 @@ pub enum Operation {
     TraceReturn(usize),
     TraceAbort,
     TraceExp(TraceKind, NodeId),
+    TraceGlobalMem(QualifiedInstId<StructId>, NodeId),
 
     // Event
     EmitEvent,
@@ -234,6 +235,7 @@ impl Operation {
             Operation::TraceExp(..) => false,
             Operation::EmitEvent => false,
             Operation::EventStoreDiverge => false,
+            Operation::TraceGlobalMem(..) => false,
         }
     }
 }
@@ -1063,6 +1065,14 @@ impl<'env> fmt::Display for OperationDisplay<'env> {
             }
             EmitEvent => write!(f, "emit_event")?,
             EventStoreDiverge => write!(f, "event_store_diverge")?,
+            TraceGlobalMem(_, node_id) => {
+                let loc = self.func_target.global_env().get_node_loc(*node_id);
+                write!(
+                    f,
+                    "trace_global_mem[{}]",
+                    loc.display(self.func_target.global_env())
+                )?
+            }
         }
         Ok(())
     }
