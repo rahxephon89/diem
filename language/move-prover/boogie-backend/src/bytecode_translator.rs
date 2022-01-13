@@ -1456,7 +1456,44 @@ impl<'env> FunctionTranslator<'env> {
                         emitln!(writer, "call $es := $EventStore__diverge($es);");
                     }
                     TraceGlobalMem(mem, node_id) => {
-                        self.track_global_mem(mem, *node_id);
+
+                        /*let mut mem_inst = mem.clone();
+                        let struct_env = env.get_struct_qid(mem_inst.to_qualified_id());
+                        let struct_name = boogie_struct_name(&struct_env, &mem_inst.inst);
+                        println!("struct name:{}, {:?}, {:?}", struct_name, mem.inst, self.type_inst);
+
+                        if mem.inst.is_empty() {
+                            //println!("before mem:{:?}, {:?}",  mem.inst, self.type_inst);
+                            //DiemTimestamp_CurrentTimeMicroseconds
+                            let struct_name = boogie_struct_name(&struct_env, &mem_inst.inst);
+                            mem_inst = mem_inst.clone().instantiate(self.type_inst);
+                            //println!("struct mem inst:{}", mem_inst.inst);
+                            let struct_env = env.get_struct_qid(mem_inst.to_qualified_id());
+                            let struct_name = boogie_struct_name(&struct_env, &mem_inst.inst);
+                            //println!("struct:{}", struct_name);
+                        }*/
+
+                        let mem = &mem.to_owned().instantiate(self.type_inst);
+                        //println!("after replacement:{:?}", mem.inst);
+                        /*
+                        let mut ty = env.get_node_type(*node_id);
+                        println!("before type:{}", boogie_type_suffix(env, &ty));
+                        ty = ty.replace_struct_instantiation(&mem.inst);
+                        env.update_node_type(*node_id, ty);
+                        println!("after type:{}", boogie_type_suffix(env, &env.get_node_type(*node_id)));
+                        */
+                        //pub fn update_node_type(&self, node_id: NodeId, ty: Type) {
+                        //ty = ty.replace_struct_instantiation(&self.env.get_node_instantiation(id));
+                        /*if self.parent.env.get_node_instantiation_opt(*node_id).is_none() {
+                            self.parent.env.set_node_instantiation(*node_id, (*self.type_inst).to_vec());
+                        } else {
+                            if self.parent.env.get_node_instantiation(*node_id).is_empty() {
+                            self.parent.env.update_node_instantiation(*node_id, (*self.type_inst).to_vec());
+                            }
+                        }*/
+                        //println!("node_id type:{:?}, mem type:{:?}", self.type_inst);
+                        let node_id = env.new_node(env.unknown_loc(), mem.to_type());
+                        self.track_global_mem(mem, node_id);
                     }
                 }
                 if let Some(AbortAction(target, code)) = aa {

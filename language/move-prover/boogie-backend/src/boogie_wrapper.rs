@@ -27,7 +27,7 @@ use move_stackless_bytecode::function_target_pipeline::{FunctionTargetsHolder, F
 // DEBUG
 // use backtrace::Backtrace;
 use crate::{
-    boogie_helpers::boogie_struct_name,
+    boogie_helpers::boogie_struct_name, boogie_type_suffix,
     options::{BoogieOptions, VectorTheory},
     prover_task_runner::{ProverTaskRunner, RunBoogieWithSeeds},
 };
@@ -370,6 +370,7 @@ impl<'env> BoogieWrapper<'env> {
                                 if let ModelValue::Literal(s) = &elems[2] {
                                     // Extract the struct name from elems[2]
                                     // e.g., $1_DiemTimestamp_CurrentTimeMicroseconds
+                                    // |T@[Int]$1_AccountLimits_LimitsDefinition'$1_XUS_XUS'!val!0|
                                     let struct_name_str = &s[s.find("_").unwrap() + 1..s.find("!").unwrap()];
                                     global_mem_map.insert(struct_name_str.to_string(), (*node_id, elems[1].clone(), elems[2].clone()));
                                 }
@@ -414,7 +415,13 @@ impl<'env> BoogieWrapper<'env> {
                 let mut trace_display = std::mem::take(&mut display);
                 display.push("Related Global Memory: ".to_string());
                 for (struct_name_str, (id, domain_value, mem_value)) in global_mem_map {
-                    let ty = self.env.get_node_type(id);
+                    let mut ty = self.env.get_node_type(id);
+                    println!("struct name str:{}, {}", struct_name_str, boogie_type_suffix(self.env, &ty));
+
+                    //ty = ty.replace_struct_instantiation(&self.env.get_node_instantiation(id));
+                    //replace_struct_instantiation
+                    //println!("ty:{:?}, inst:{:?}", ty, self.env.get_node_instantiation(id));
+
                     let pretty = mem_value.pretty_mem(self, &domain_value, error.model.as_ref().unwrap(), &ty).unwrap();
                     display.extend(self.make_mem_entry(struct_name_str, pretty));
                 }
@@ -1002,6 +1009,7 @@ impl ModelValue {
                 } else if key == &ModelValue::literal("else") {
                     // Currently, we assume existence of default memory locations print out the value.
                     default = value.clone();
+                    println!("df:{:?}", default);
                 }
         }
         Some(ModelValueVector {
@@ -1188,6 +1196,7 @@ impl ModelValue {
             }
             Type::Vector(param) => self.pretty_vector(wrapper, model, param),
             Type::Struct(module_id, struct_id, params) => {
+                println!("print struct:");
                 self.pretty_struct(wrapper, model, *module_id, *struct_id, params)
             }
             Type::Reference(_, bt) => {
@@ -1281,11 +1290,13 @@ impl ModelValue {
             vec![PrettyDoc::text(rep)]
         } else {
             let struct_name = &boogie_struct_name(&struct_env, inst);
+            println!("struct name:{}", struct_name);
             let values = self
                 .extract_list(struct_name)
                 // It appears sometimes keys are represented witout, sometimes with enclosing
                 // bars?
                 .or_else(|| self.extract_list(&format!("|{}|", struct_name)))?;
+            println!("after value extraction");
             struct_env
                 .get_fields()
                 .enumerate()
@@ -1353,6 +1364,7 @@ impl ModelValue {
         }
         //if next < values.size || sparse {
             //println!("parse default:{:?}:{:?}", param, values.default);
+        println!("default:{:?}", values.default);
         let default = values
             .default
             .pretty(wrapper, model, param)
